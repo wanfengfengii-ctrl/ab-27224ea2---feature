@@ -39,6 +39,7 @@
     mul(o) { o = Frac.of(o); return new Frac(this.n * o.n, this.d * o.d); }
     div(o) { o = Frac.of(o); if (o.n === 0n) throw new Error('Frac: 除以零'); return new Frac(this.n * o.d, this.d * o.n); }
     neg() { return new Frac(-this.n, this.d); }
+    abs() { return this.n < 0n ? new Frac(-this.n, this.d) : this; }
     cmp(o) { o = Frac.of(o); const l = this.n * o.d, r = o.n * this.d; return l < r ? -1 : l > r ? 1 : 0; }
     eq(o) { return this.cmp(o) === 0; }
     lt(o) { return this.cmp(o) < 0; }
@@ -223,12 +224,172 @@
     return safe;
   }
 
+  /* ================= 二次根式（a + b·√w 的精确表示） ================= */
+  // 跟踪角速度超限区间的端点是方程 q(u) = ρ 的根，一般为二次不尽根数（无理数）。
+  // 用 a + b·√w（a、b、w 均为 Frac 有理数，w ≥ 0）精确表示；符号与大小比较全部
+  // 只经过有限次有理数平方比较完成，不做任何浮点近似，因此「全程最早超限」的
+  // 选择也是精确、稳定（确定性）的。
+  class Surd {
+    constructor(a, b, w) {
+      this.a = Frac.of(a); this.b = Frac.of(b); this.w = Frac.of(w);
+      if (this.w.cmp(F0()) < 0) throw new Error('Surd: 根号内为负');
+    }
+    static of(x) { return x instanceof Surd ? x : new Surd(Frac.of(x), F0(), F0()); }
+    toNumber() { return this.a.toNumber() + this.b.toNumber() * Math.sqrt(this.w.toNumber()); }
+    toString() { return (this.b.isZero() || this.w.isZero()) ? this.a.toString() : `${this.a} + ${this.b}·√(${this.w})`; }
+  }
+
+  const cmp0 = (f) => f.cmp(F0());
+  const negSign = (s) => (s === 0 ? 0 : -s); // 避免产生 -0
+  // 返回 a + b·√w 的符号（w ≥ 0）
+  function signSurd1(a, b, w) {
+    if (b.isZero() || w.isZero()) return cmp0(a);
+    if (a.isZero()) return cmp0(b);
+    const sa = cmp0(a);
+    if (sa === cmp0(b)) return sa;
+    // 异号：a + b·√w 的符号 = sign(a) · sign(a² − b²·w)
+    const d = cmp0(a.mul(a).sub(b.mul(b).mul(w)));
+    return sa > 0 ? d : negSign(d);
+  }
+  // 返回 b1·√w1 + b2·√w2 的符号（wi > 0，bi ≠ 0）
+  function signRootSum(b1, w1, b2, w2) {
+    const s1 = cmp0(b1), s2 = cmp0(b2);
+    if (s1 === s2) return s1;
+    const d = cmp0(b1.mul(b1).mul(w1).sub(b2.mul(b2).mul(w2)));
+    return s1 > 0 ? d : negSign(d);
+  }
+  // 返回 a + b1·√w1 + b2·√w2 的符号（至多两个根式项，精确判定）
+  function signSurd2(a, b1, w1, b2, w2) {
+    const t1 = !(b1.isZero() || w1.isZero()), t2 = !(b2.isZero() || w2.isZero());
+    if (!t1) return signSurd1(a, b2, w2);
+    if (!t2) return signSurd1(a, b1, w1);
+    if (a.isZero()) return signRootSum(b1, w1, b2, w2);
+    const sRoots = signRootSum(b1, w1, b2, w2);
+    const sa = cmp0(a);
+    if (sRoots === 0 || sRoots === sa) return sa;
+    // a 与根式和 S 异号：比较 a² 与 S² = b1²w1 + b2²w2 + 2·b1·b2·√(w1·w2)
+    const bb = b1.mul(b2);
+    const s2 = signSurd1(
+      b1.mul(b1).mul(w1).add(b2.mul(b2).mul(w2)).sub(a.mul(a)),
+      bb.add(bb),
+      w1.mul(w2)
+    );
+    if (s2 === 0) return 0; // |S| = |a| 且异号 ⇒ 和为 0
+    return s2 > 0 ? sRoots : sa;
+  }
+
+  // sign(S − r)：根式与有理数比较
+  function surdCmpRational(S, r) { return signSurd1(S.a.sub(Frac.of(r)), S.b, S.w); }
+  // sign(S1 − S2)：两个根式比较（精确）
+  function surdCmp(S1, S2) { return signSurd2(S1.a.sub(S2.a), S1.b, S1.w, S2.b.neg(), S2.w); }
+
+  // 同根式四则（用于端点回代复核 q(u)=ρ；根式不同且均非常数时报错）
+  function sameW(S1, S2) {
+    if (S1.b.isZero() || S1.w.isZero()) return S2.w;
+    if (S2.b.isZero() || S2.w.isZero()) return S1.w;
+    if (!S1.w.eq(S2.w)) throw new Error('Surd: 根式不同，无法合并');
+    return S1.w;
+  }
+  function surdAdd(S1, S2) { const w = sameW(S1, S2); return new Surd(S1.a.add(S2.a), S1.b.add(S2.b), w); }
+  function surdScale(S, k) { k = Frac.of(k); return new Surd(S.a.mul(k), S.b.mul(k), S.w); }
+  function surdMul(S1, S2) {
+    const w = sameW(S1, S2);
+    return new Surd(S1.a.mul(S2.a).add(S1.b.mul(S2.b).mul(w)), S1.a.mul(S2.b).add(S1.b.mul(S2.a)), w);
+  }
+  // c + k·S（仿射，用于把 u 区间端点映射到 t）
+  function surdAffine(S, k, c) { return surdAdd(Surd.of(c), surdScale(S, k)); }
+
+  // 十进制展示：有理数退化为普通分数格式，否则给近似值
+  function fmtSurd(S, places = 6) {
+    if (S.b.isZero() || S.w.isZero()) return fmt(S.a);
+    let s = S.toNumber().toFixed(places);
+    if (s.includes('.')) s = s.replace(/0+$/, '').replace(/\.$/, '');
+    return `≈ ${s}`;
+  }
+  // 精确形式：a ± b·√w（根号内与系数用分数表示，便于复核）
+  function fmtSurdExact(S) {
+    if (S.b.isZero() || S.w.isZero()) return fmtFull(S.a);
+    const neg = S.b.cmp(F0()) < 0;
+    const bAbs = neg ? S.b.neg() : S.b;
+    const coef = bAbs.eq(F1()) ? '' : `${bAbs.toString()}·`;
+    return `${fmt(S.a)} ${neg ? '−' : '+'} ${coef}√(${S.w.toString()})`;
+  }
+
+  /* ================= 跟踪角速度（连续、精确） ================= */
+  // 相机匀速 C(u) = A + u·(B−A)，指向标记 M 的方向向量 d(u) = (M−A) − u·(B−A)。
+  // 记 v = B−A，d0 = M−A，Δt = t1−t0，则瞬时角速度大小
+  //   |ω(t)| = |v × d0| / (Δt · |d(u)|²)   （分子 v×d0 沿航段为常数）
+  // 故 ω²(u) = c² / (Δt² · q(u)²)，q(u) = |d(u)|² 是 u 的二次函数，
+  // 最大值在最近点 u* = clamp((d0·v)/|v|², 0, 1) 处取得（有理数，非抽样）。
+  // 超限 ⟺ ω²_max > Ω²（精确有理数比较）⟺ q(u) < ρ，ρ = |c|/(Ω·Δt) 为有理数；
+  // 超限区间端点为 q(u) = ρ 的根 m ± √w（Surd 精确表示）。
+  // q(u*) = 0 ⟺ 相机经过标记点 ⟹ 指向方向未定义，判为不可执行。
+  function trackingSegment(A, B, M, t0, t1, limit) {
+    const vx = B.x.sub(A.x), vy = B.y.sub(A.y);
+    const dx = M.x.sub(A.x), dy = M.y.sub(A.y);
+    const span = t1.sub(t0);
+    const v2 = vx.mul(vx).add(vy.mul(vy));
+    const res = {
+      limit, exceeded: false, undefined: false, violation: false,
+      uStar: null, tStar: null, cameraStar: null,
+      omega2Max: null, omegaMax: null,
+      uLo: null, uHi: null, tLo: null, tHi: null,
+    };
+    if (v2.isZero()) { // 相机静止：方向恒定（ω = 0），除非相机就停在标记上
+      res.uStar = F0(); res.tStar = t0; res.cameraStar = A;
+      if (dx.isZero() && dy.isZero()) {
+        res.undefined = true; res.violation = true;
+        res.tLo = Surd.of(t0); res.tHi = Surd.of(t1); // 整段方向未定义
+      } else {
+        res.omega2Max = F0(); res.omegaMax = F0();
+      }
+      return res;
+    }
+    const c = vx.mul(dy).sub(vy.mul(dx)); // v × d0（常数）
+    const dot = dx.mul(vx).add(dy.mul(vy));
+    let uStar = dot.div(v2);
+    if (uStar.cmp(F0()) < 0) uStar = F0(); else if (uStar.cmp(F1()) > 0) uStar = F1();
+    const qAt = (u) => {
+      const rx = dx.sub(vx.mul(u)), ry = dy.sub(vy.mul(u));
+      return rx.mul(rx).add(ry.mul(ry));
+    };
+    const qMin = qAt(uStar);
+    res.uStar = uStar;
+    res.tStar = t0.add(uStar.mul(span));
+    res.cameraStar = cameraAt(A, B, uStar);
+    if (qMin.isZero()) { // 相机经过标记点：指向未定义
+      res.undefined = true; res.violation = true;
+      res.tLo = Surd.of(res.tStar); res.tHi = Surd.of(res.tStar);
+      return res;
+    }
+    const c2 = c.mul(c), span2 = span.mul(span);
+    res.omega2Max = c2.div(qMin.mul(qMin).mul(span2));
+    res.omegaMax = c.abs().div(qMin.mul(span));
+    if (res.omega2Max.gt(limit.mul(limit))) { // 精确比较：ω²_max 与 Ω²
+      res.exceeded = true; res.violation = true;
+      const rho = c.abs().div(limit.mul(span)); // q 的临界值（有理数）
+      const m = dot.div(v2); // 对称轴（有理数）
+      const w = v2.mul(rho).sub(c2).div(v2.mul(v2)); // 根号内（正有理数）
+      const lo = new Surd(m, new Frac(-1n), w), hi = new Surd(m, F1(), w);
+      // 超限开区间 (m−√w, m+√w) 与 [0,1] 求交（端点比较有理数精确完成）
+      res.uLo = surdCmpRational(lo, F0()) > 0 ? lo : Surd.of(F0());
+      res.uHi = surdCmpRational(hi, F1()) < 0 ? hi : Surd.of(F1());
+      res.tLo = surdAffine(res.uLo, span, t0);
+      res.tHi = surdAffine(res.uHi, span, t0);
+    }
+    return res;
+  }
+
   /* ================= 全场景校核 ================= */
-  // parsed: { keyframes:[{t,p}], markers:[p], rects:[{x1,y1,x2,y2}] }（均为 Frac）
+  // parsed: { keyframes:[{t,p}], markers:[p], rects:[{x1,y1,x2,y2}], limits:[Frac|null]? }（均为 Frac）
+  // limits 可选：第 i 个标记的最大跟踪角速度限值 Ω（正有理数）；缺省或为 null 表示该标记不限制，
+  // 此时该标记（及全场）的遮挡结论、区间与首项证据与既有行为完全一致。
   function checkScenario(parsed) {
     const K = parsed.keyframes, Ms = parsed.markers, Rs = parsed.rects;
+    const limits = parsed.limits || Ms.map(() => null);
     const segments = [];
     let first = null;
+    let firstAngular = null;
     for (let i = 0; i < K.length - 1; i++) {
       const A = K[i].p, B = K[i + 1].p, t0 = K[i].t, t1 = K[i + 1].t;
       const span = t1.sub(t0);
@@ -261,14 +422,33 @@
         const safe = safeComplement(occluded, t0, t1);
         return { markerIndex: mi, occluded, safe };
       });
-      segments.push({ index: i, t0, t1, A, B, entries, byMarker });
+      // —— 跟踪角速度：仅对设置了限值的标记做连续判定（不抽样）——
+      const angular = [];
+      for (let mi = 0; mi < Ms.length; mi++) {
+        const lim = limits[mi];
+        if (!lim) continue;
+        const a = trackingSegment(A, B, Ms[mi], t0, t1, lim);
+        a.markerIndex = mi;
+        angular.push(a);
+        if (a.violation && (!firstAngular || surdCmp(a.tLo, firstAngular.t) < 0)) {
+          firstAngular = {
+            segmentIndex: i, markerIndex: mi,
+            t: a.tLo, tHi: a.tHi, tStar: a.tStar, u: a.uStar,
+            camera: a.cameraStar, omegaMax: a.omegaMax, omega2Max: a.omega2Max,
+            limit: lim, exceeded: a.exceeded, undefined: a.undefined,
+          };
+        }
+      }
+      segments.push({ index: i, t0, t1, A, B, entries, byMarker, angular });
     }
-    return { ok: !first, firstOcclusion: first, segments, t0: K[0].t, t1: K[K.length - 1].t };
+    return { ok: !first && !firstAngular, firstOcclusion: first, firstAngular, segments, t0: K[0].t, t1: K[K.length - 1].t };
   }
 
   return {
     Frac, Pt, rectFrom, tryParse, fmt, fmtFull,
     orient, pointInRectClosed, clipPolygonRect, paramU, cameraAt,
     sweepInterval, mergeIntervals, safeComplement, checkScenario,
+    Surd, surdCmp, surdCmpRational, surdAdd, surdMul, surdAffine,
+    fmtSurd, fmtSurdExact, trackingSegment,
   };
 });

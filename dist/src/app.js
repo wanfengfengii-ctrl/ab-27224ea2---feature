@@ -46,20 +46,31 @@
   /* ---------------- 校核 ---------------- */
   const rawFromState = () => ({
     keyframes: state.keyframes.map((k) => ({ tStr: k.tStr, x: k.x, y: k.y })),
-    markers: state.markers.map((m) => ({ x: m.x, y: m.y })),
+    markers: state.markers.map((m) => ({ x: m.x, y: m.y, omegaStr: m.omegaStr })),
     rects: state.rects.map((r) => ({ x: r.x, y: r.y, w: r.w, h: r.h })),
   });
+
+  const hasLimits = () => !!(state.parsed && state.parsed.limits && state.parsed.limits.some(Boolean));
 
   function recheck() {
     const v = Validate.scenario(rawFromState(), { width: W, height: H });
     state.errors = v.errors;
     state.parsed = v.parsed;
     state.result = v.parsed ? Geo.checkScenario(v.parsed) : null;
-    if (state.result && state.result.firstOcclusion) {
-      // 把时间轴定位到最早遮挡时刻，让摄影师立即看到首个证据
-      const r = state.result, span = r.t1.sub(r.t0);
-      state.scrub = span.isZero() ? 0 : r.firstOcclusion.t.sub(r.t0).toNumber() / span.toNumber();
-      els.scrub.value = String(Math.round(state.scrub * 1000));
+    if (state.result) {
+      // 把时间轴定位到全程最早问题时刻（遮挡或跟踪超限，取更早者），让摄影师立即看到首项证据
+      const r = state.result;
+      let tAnchor = null;
+      if (r.firstOcclusion) tAnchor = r.firstOcclusion.t.toNumber();
+      if (r.firstAngular) {
+        const ta = r.firstAngular.t.toNumber();
+        if (tAnchor === null || ta < tAnchor) tAnchor = ta;
+      }
+      if (tAnchor !== null) {
+        const span = r.t1.sub(r.t0);
+        state.scrub = span.isZero() ? 0 : (tAnchor - r.t0.toNumber()) / span.toNumber();
+        els.scrub.value = String(Math.round(state.scrub * 1000));
+      }
     }
     renderPanels();
     draw();
@@ -81,10 +92,28 @@
     const t0 = ks[i].t, t1 = ks[i + 1].t;
     const u = t1.gt(t0) ? t.sub(t0).div(t1.sub(t0)) : new Geo.Frac(0n);
     const C = Geo.cameraAt(ks[i].p, ks[i + 1].p, u);
+    const A = ks[i].p, B = ks[i + 1].p;
+    const span = t1.sub(t0);
+    const vx = B.x.sub(A.x), vy = B.y.sub(A.y);
+    const limits = state.parsed.limits || [];
     const lines = state.parsed.markers.map((M, mi) => {
       const hits = [];
       state.parsed.rects.forEach((R, ri) => { if (Geo.sweepInterval(C, C, M, R)) hits.push(ri); });
-      return { mi, M, hits };
+      // 该时刻的跟踪角速度：ω² = c²/(Δt²·q²)，与限值平方精确比较
+      let ang = null;
+      const lim = limits[mi];
+      if (lim) {
+        const rx = M.x.sub(C.x), ry = M.y.sub(C.y);
+        const q = rx.mul(rx).add(ry.mul(ry));
+        if (q.isZero()) {
+          ang = { undefined: true };
+        } else {
+          const c = vx.mul(M.y.sub(A.y)).sub(vy.mul(M.x.sub(A.x)));
+          const omega2 = c.mul(c).div(q.mul(q).mul(span).mul(span));
+          ang = { omega2, exceeded: omega2.gt(lim.mul(lim)) };
+        }
+      }
+      return { mi, M, hits, ang };
     });
     return { C, lines, segIndex: i, u };
   }
@@ -92,10 +121,23 @@
   /* ---------------- 面板渲染 ---------------- */
   function renderPanels() {
     const v = els.verdict;
+    const r = state.result;
     if (state.errors.length) { v.className = 'verdict invalid'; v.textContent = '配置无效，无法校核'; }
-    else if (!state.result) { v.className = 'verdict pending'; v.textContent = '待校核'; }
-    else if (state.result.ok) { v.className = 'verdict ok'; v.textContent = '✓ 校核通过：全程无遮挡，曝光可执行'; }
-    else { v.className = 'verdict bad'; v.textContent = '✗ 存在遮挡：该次曝光不可执行'; }
+    else if (!r) { v.className = 'verdict pending'; v.textContent = '待校核'; }
+    else if (r.ok) {
+      v.className = 'verdict ok';
+      v.textContent = hasLimits()
+        ? '✓ 校核通过：全程无遮挡、跟踪角速度未超限，曝光可执行'
+        : '✓ 校核通过：全程无遮挡，曝光可执行';
+    } else {
+      v.className = 'verdict bad';
+      const occ = !!r.firstOcclusion, ang = !!r.firstAngular;
+      v.textContent = occ && ang
+        ? '✗ 存在遮挡且跟踪超限：该次曝光不可执行'
+        : occ
+          ? '✗ 存在遮挡：该次曝光不可执行'
+          : '✗ 跟踪转向超限或方向失效：该次曝光不可执行';
+    }
 
     els.errors.innerHTML = state.errors.map((e) => `<div class="err">• ${esc(e)}</div>`).join('');
     renderEvidence();
@@ -106,12 +148,26 @@
 
   function renderEvidence() {
     const r = state.result;
-    if (!r || !r.firstOcclusion) { els.evidence.innerHTML = ''; return; }
-    const f = r.firstOcclusion;
+    if (!r || (!r.firstOcclusion && !r.firstAngular)) { els.evidence.innerHTML = ''; return; }
+    // 两张证据卡按全程最早时刻精确排序（根式与有理数的精确比较），最早者为首项依据
+    const cards = [];
+    if (r.firstOcclusion) cards.push({ ang: false });
+    if (r.firstAngular) cards.push({ ang: true });
+    if (cards.length === 2 && Geo.surdCmpRational(r.firstAngular.t, r.firstOcclusion.t) < 0) {
+      cards.reverse();
+    }
+    els.evidence.innerHTML = cards
+      .map((c, i) => (c.ang ? angularCard(r.firstAngular) : occlusionCard(r.firstOcclusion))
+        .replace('<h3>', `<h3>${i === 0 ? '<span class="first-tag">首项依据</span>' : ''}`))
+      .join('');
+  }
+
+  function occlusionCard(f) {
+    const r = state.result;
     const seg = r.segments[f.segmentIndex];
     const M = state.parsed.markers[f.markerIndex];
     const R = state.parsed.rects[f.rectIndex];
-    els.evidence.innerHTML = `
+    return `
       <div class="card danger">
         <h3>最早遮挡证据（可复核）</h3>
         <ul>
@@ -125,6 +181,41 @@
           <li>接触点（在矩形边界上）：${esc(fmtP(f.contact))}</li>
         </ul>
         <p class="note">画布已用红色虚线绘制该时刻的相机位置、视线与接触点；拖动时间轴可逐时刻复核。</p>
+      </div>`;
+  }
+
+  function angularCard(f) {
+    const r = state.result;
+    const seg = r.segments[f.segmentIndex];
+    const M = state.parsed.markers[f.markerIndex];
+    const segLine = `<li>航段：K${f.segmentIndex + 1} → K${f.segmentIndex + 2}（t ∈ [${esc(fmt(seg.t0))}, ${esc(fmt(seg.t1))}]）</li>`;
+    const mkLine = `<li>标记点：M${f.markerIndex + 1} ${esc(fmtP(M))}，限值 Ω = ${esc(Geo.fmtFull(f.limit))}</li>`;
+    if (f.undefined) {
+      return `
+      <div class="card danger">
+        <h3>方向失效证据（可复核）</h3>
+        <ul>
+          <li>时刻：<b>t = ${esc(Geo.fmtFull(f.tStar))}</b>（相机经过标记点，激光对焦指向未定义）</li>
+          ${segLine}
+          ${mkLine}
+          <li>相机位置：C(t) = ${esc(fmtP(f.camera))}（与标记点重合）</li>
+        </ul>
+        <p class="note">指向标记的方向在该时刻无定义，角速度发散；时间轴已标出该时刻。</p>
+      </div>`;
+    }
+    return `
+      <div class="card danger">
+        <h3>最早跟踪超限证据（可复核）</h3>
+        <ul>
+          <li>超限区间：t ∈ [${esc(Geo.fmtSurd(f.t))}, ${esc(Geo.fmtSurd(f.tHi))}]
+            <span class="muted">（精确端点 ${esc(Geo.fmtSurdExact(f.t))} ～ ${esc(Geo.fmtSurdExact(f.tHi))}，端点处 ω 恰等于限值）</span></li>
+          ${segLine}
+          ${mkLine}
+          <li>最猛时刻：t = ${esc(Geo.fmtFull(f.tStar))}，相机位置 C(t) = ${esc(fmtP(f.camera))}</li>
+          <li>实际角速度：<b>ω = ${esc(Geo.fmtFull(f.omegaMax))}</b> ＞ 限值 Ω = ${esc(Geo.fmtFull(f.limit))}</li>
+          <li>精确比较：ω² = ${esc(Geo.fmtFull(f.omega2Max))} ＞ Ω² = ${esc(Geo.fmtFull(f.limit.mul(f.limit)))}</li>
+        </ul>
+        <p class="note">时间轴已用红色标出全部超限区间；画布红色虚线为最猛时刻的相机位置与视线，红色加粗航段为超限段。</p>
       </div>`;
   }
 
@@ -144,7 +235,17 @@
         const safe = bm.safe.length ? bm.safe.map(iv).join(' ∪ ') : '无';
         return `<div class="row bad">M${bm.markerIndex + 1}：${occ}<br><span class="safe">安全区间：${safe}</span></div>`;
       }).join('');
-      return `<div class="seg"><h4>航段 K${seg.index + 1} → K${seg.index + 2}（t ∈ [${esc(fmt(seg.t0))}, ${esc(fmt(seg.t1))}]）</h4>${rows}</div>`;
+      const angRows = (seg.angular || []).map((a) => {
+        const mi = a.markerIndex + 1;
+        if (a.undefined) {
+          return `<div class="row bad">M${mi}：t = ${esc(fmt(a.tStar))} 相机经过标记点，指向未定义（限值 Ω = ${esc(fmt(a.limit))}）</div>`;
+        }
+        if (a.exceeded) {
+          return `<div class="row bad">M${mi}：跟踪超限 ω = ${esc(Geo.fmtFull(a.omegaMax))} ＞ Ω = ${esc(fmt(a.limit))}，超限区间 t ∈ [${esc(Geo.fmtSurd(a.tLo))}, ${esc(Geo.fmtSurd(a.tHi))}]</div>`;
+        }
+        return `<div class="row ok">M${mi}：跟踪角速度 ω_max = ${esc(fmt(a.omegaMax))} ≤ 限值 ${esc(fmt(a.limit))}，未超限</div>`;
+      }).join('');
+      return `<div class="seg"><h4>航段 K${seg.index + 1} → K${seg.index + 2}（t ∈ [${esc(fmt(seg.t0))}, ${esc(fmt(seg.t1))}]）</h4>${rows}${angRows}</div>`;
     }).join('');
   }
 
@@ -163,6 +264,7 @@
         <span class="tag tag-m">M${i + 1}</span>
         <label>x <input type="number" data-kind="marker" data-id="${m.id}" data-field="x" value="${m.x}"></label>
         <label>y <input type="number" data-kind="marker" data-id="${m.id}" data-field="y" value="${m.y}"></label>
+        <label>ω限 <input data-kind="marker" data-id="${m.id}" data-field="omegaStr" value="${esc(m.omegaStr || '')}" placeholder="不限" title="最大跟踪角速度（正小数，留空表示不限制）"></label>
         <button type="button" data-act="del" data-kind="marker" data-id="${m.id}" title="删除">×</button>
       </div>`).join('');
     els.rectList.innerHTML = state.rects.map((r, i) => `
@@ -179,7 +281,7 @@
   // 拖动时同步右侧面板数值（不重渲染列表，避免输入框失焦）
   function syncInputs() {
     document.querySelectorAll('aside input[data-field]').forEach((inp) => {
-      if (inp.dataset.field === 'tStr' || document.activeElement === inp) return;
+      if (inp.dataset.field === 'tStr' || inp.dataset.field === 'omegaStr' || document.activeElement === inp) return;
       const it = findItem(inp.dataset.kind, Number(inp.dataset.id));
       if (it) inp.value = it[inp.dataset.field];
     });
@@ -193,7 +295,11 @@
     const occTxt = occ.length
       ? '　⚠ 遮挡：' + occ.map((l) => `M${l.mi + 1}×${l.hits.map((r) => 'R' + (r + 1)).join('/')}`).join('，')
       : '　✓ 此时刻全部视线安全';
-    els.scrubLabel.textContent = `t = ${Geo.fmtFull(t)}（航段 K${info.segIndex + 1}→K${info.segIndex + 2}）` + occTxt;
+    const angBad = info.lines.filter((l) => l.ang && (l.ang.exceeded || l.ang.undefined));
+    const angTxt = angBad.length
+      ? '　⚠ 跟踪：' + angBad.map((l) => (l.ang.undefined ? `M${l.mi + 1} 方向失效` : `M${l.mi + 1} 超限`)).join('，')
+      : '';
+    els.scrubLabel.textContent = `t = ${Geo.fmtFull(t)}（航段 K${info.segIndex + 1}→K${info.segIndex + 2}）` + occTxt + angTxt;
   }
 
   /* ---------------- 画布绘制 ---------------- */
@@ -201,13 +307,16 @@
     ctx.clearRect(0, 0, W, H);
     drawGrid();
     drawPath();
+    drawAngularPaths();
     state.rects.forEach((r, i) => drawRect(r, i));
     drawAllContacts();
     drawScrubLines();
     state.markers.forEach((m, i) => drawMarker(m, i));
     state.keyframes.forEach((k, i) => drawKey(k, i));
     drawEvidence();
+    drawEvidenceAngular();
     if (drag && drag.type === 'create') drawGhostRect(drag);
+    drawTimeline();
   }
 
   function drawGrid() {
@@ -283,6 +392,34 @@
     ctx.restore();
   }
 
+  // 跟踪超限的航段子区间加粗标红；方向失效时刻画 ×
+  function drawAngularPaths() {
+    const r = state.result;
+    if (!r) return;
+    ctx.save();
+    for (const seg of r.segments) {
+      const ax = seg.A.x.toNumber(), ay = seg.A.y.toNumber();
+      const bx = seg.B.x.toNumber(), by = seg.B.y.toNumber();
+      const at = (u) => ({ x: ax + (bx - ax) * u, y: ay + (by - ay) * u });
+      for (const a of seg.angular || []) {
+        if (!a.violation) continue;
+        if (a.exceeded) {
+          const p1 = at(a.uLo.toNumber()), p2 = at(a.uHi.toNumber());
+          ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y);
+          ctx.strokeStyle = '#ff5a5a'; ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.stroke();
+        } else if (a.undefined) {
+          const p = at(a.uStar.toNumber());
+          ctx.strokeStyle = '#ff5a5a'; ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.moveTo(p.x - 7, p.y - 7); ctx.lineTo(p.x + 7, p.y + 7);
+          ctx.moveTo(p.x + 7, p.y - 7); ctx.lineTo(p.x - 7, p.y + 7);
+          ctx.stroke();
+        }
+      }
+    }
+    ctx.restore();
+  }
+
   function drawScrubLines() {
     if (!state.parsed || state.parsed.keyframes.length < 2) return;
     const info = instantInfo(scrubT());
@@ -320,6 +457,58 @@
     ctx.fillStyle = '#ffd84d'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
     ctx.fillText(`首次遮挡 t=${fmt(f.t)}`, clamp(px + 10, 4, W - 130), clamp(py - 10, 14, H - 4));
     ctx.restore();
+  }
+
+  // 最早跟踪超限/方向失效证据：最猛时刻的相机位置与视线（红色虚线）
+  function drawEvidenceAngular() {
+    const r = state.result;
+    if (!r || !r.firstAngular) return;
+    const f = r.firstAngular;
+    const M = state.parsed.markers[f.markerIndex];
+    const cx = f.camera.x.toNumber(), cy = f.camera.y.toNumber();
+    const mx = M.x.toNumber(), my = M.y.toNumber();
+    ctx.save();
+    ctx.strokeStyle = '#ff5a5a'; ctx.lineWidth = 2.5; ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(mx, my); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(cx, cy, 8, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#ff8a8a'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+    const label = f.undefined
+      ? `方向失效 t=${fmt(f.tStar)}`
+      : `跟踪超限 t=${fmt(f.tStar)}，ω=${fmt(f.omegaMax)}>Ω=${fmt(f.limit)}`;
+    ctx.fillText(label, clamp(cx + 12, 4, W - 220), clamp(cy - 12, 14, H - 4));
+    ctx.restore();
+  }
+
+  // 时间轴：标出全部跟踪超限区间（红色带）与方向失效时刻（竖线），白线为当前时刻
+  function drawTimeline() {
+    const tl = document.getElementById('timeline');
+    if (!tl) return;
+    const g = tl.getContext('2d');
+    const wpx = tl.clientWidth, hpx = tl.height;
+    if (wpx > 0 && tl.width !== wpx) tl.width = wpx;
+    g.clearRect(0, 0, tl.width, hpx);
+    const r = state.result;
+    if (!r || !state.parsed || state.parsed.keyframes.length < 2) return;
+    const t0 = r.t0.toNumber(), t1 = r.t1.toNumber();
+    const X = (t) => ((t - t0) / (t1 - t0)) * tl.width;
+    g.strokeStyle = '#2b333e'; g.lineWidth = 1;
+    for (const k of state.parsed.keyframes) {
+      const x = X(k.t.toNumber()) + 0.5;
+      g.beginPath(); g.moveTo(x, 0); g.lineTo(x, hpx); g.stroke();
+    }
+    g.fillStyle = 'rgba(255,90,90,0.5)';
+    for (const seg of r.segments) {
+      for (const a of seg.angular || []) {
+        if (!a.violation) continue;
+        const x1 = X(a.tLo.toNumber()), x2 = X(a.tHi.toNumber());
+        if (x2 - x1 < 2) g.fillRect(x1 - 1, 0, 2, hpx); // 点事件（方向失效）
+        else g.fillRect(x1, 3, x2 - x1, hpx - 6);
+      }
+    }
+    const xc = state.scrub * tl.width;
+    g.strokeStyle = '#ffffff'; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(xc, 0); g.lineTo(xc, hpx); g.stroke();
   }
 
   function drawGhostRect(d) {
@@ -367,7 +556,7 @@
     }
     if (state.mode === 'marker') {
       if (state.markers.length >= 6) return hint('最多 6 个标记点');
-      state.markers.push({ id: uid++, x: p.x, y: p.y });
+      state.markers.push({ id: uid++, x: p.x, y: p.y, omegaStr: '' });
       renderLists(); recheck(); return;
     }
     if (state.mode === 'rect') {
@@ -437,7 +626,7 @@
     cv.style.cursor = m === 'select' ? 'default' : 'crosshair';
     hint({
       keyframe: '在画布上点击放置相机关键帧（2–4 个）',
-      marker: '在画布上点击放置标记点（2–6 个）',
+      marker: '在画布上点击放置标记点（2–6 个），可在右侧补录 ω 限值',
       rect: '在画布上按住拖拽画出保护矩形（1–4 个）',
       select: '',
     }[m] || '');
@@ -463,8 +652,9 @@
   $('btnCheck').addEventListener('click', () => {
     recheck();
     hint(state.errors.length ? '请先修正配置错误'
-      : state.result && state.result.ok ? '校核通过：全程无遮挡'
-      : '校核完成：存在遮挡，最早证据见右侧面板');
+      : state.result && state.result.ok
+        ? (hasLimits() ? '校核通过：全程无遮挡、跟踪未超限' : '校核通过：全程无遮挡')
+        : '校核完成：存在遮挡或跟踪超限，最早证据见右侧面板');
   });
   els.scrub.addEventListener('input', () => {
     state.scrub = Number(els.scrub.value) / 1000;
@@ -480,7 +670,7 @@
     if (!d.field) return;
     const it = findItem(d.kind, Number(d.id));
     if (!it) return;
-    if (d.field === 'tStr') it.tStr = e.target.value;
+    if (d.field === 'tStr' || d.field === 'omegaStr') it[d.field] = e.target.value;
     else {
       const v = Math.round(Number(e.target.value));
       if (Number.isFinite(v)) it[d.field] = v;
@@ -505,8 +695,8 @@
       { tStr: '6', x: 900, y: 500 },
     ].map((k) => ({ id: uid++, ...k }));
     state.markers = [
-      { x: 480, y: 400 },
-      { x: 150, y: 520 },
+      { x: 480, y: 400, omegaStr: '0.5' },
+      { x: 150, y: 520, omegaStr: '' },
     ].map((m) => ({ id: uid++, ...m }));
     state.rects = [
       { x: 380, y: 140, w: 200, h: 120 },
@@ -514,7 +704,7 @@
     ].map((r) => ({ id: uid++, ...r }));
     state.selected = null;
     renderLists(); recheck();
-    hint('已载入示例：存在遮挡，最早证据见右侧面板；可拖动元素观察实时校核');
+    hint('已载入示例：存在遮挡与跟踪超限，最早证据见右侧面板；可拖动元素观察实时校核');
   }
 
   setMode('select');

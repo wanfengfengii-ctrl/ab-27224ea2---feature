@@ -146,3 +146,178 @@ test('checkScenario：全程安全', () => {
   assert.equal(r.ok, true);
   assert.equal(r.firstOcclusion, null);
 });
+
+/* ================= 二次根式（Surd） ================= */
+const S = (a, b, w) => new Geo.Surd(F(a), F(b), F(w));
+
+test('Surd：与有理数精确比较', () => {
+  assert.ok(Geo.surdCmpRational(S(3, -1, 2), F(0)) > 0); // 3 − √2 > 0
+  assert.ok(Geo.surdCmpRational(S(3, -1, 2), F(2)) < 0); // 3 − √2 ≈ 1.586 < 2
+  assert.ok(Geo.surdCmpRational(S(3, -1, 2), F(8, 5)) < 0); // < 1.6
+  assert.ok(Geo.surdCmpRational(S(3, -1, 2), F(7, 5)) > 0); // > 1.4
+  assert.equal(Geo.surdCmpRational(S(1, -1, 4), F(-1)), 0); // 1 − √4 = −1（完全平方）
+  assert.equal(Geo.surdCmpRational(S(0, 0, 0), F(0)), 0);
+});
+
+test('Surd：两个根式精确比较', () => {
+  assert.ok(Geo.surdCmp(S(0, 1, 2), S(0, 1, 3)) < 0); // √2 < √3
+  assert.equal(Geo.surdCmp(S(0, 1, 8), S(0, 2, 2)), 0); // √8 = 2√2
+  assert.ok(Geo.surdCmp(S(1, 1, 2), S(2, 1, 3)) < 0); // 1+√2 < 2+√3
+  assert.ok(Geo.surdCmp(S(5, -1, 2), S(4, -1, 3)) > 0); // 5−√2 ≈ 3.59 > 4−√3 ≈ 2.27
+  assert.equal(Geo.surdCmp(S(2, 1, 12), S(2, 2, 3)), 0); // 2+√12 = 2+2√3
+});
+
+test('Surd：同根式四则与仿射', () => {
+  const u = S(1, -1, 2); // 1 − √2
+  const u2 = Geo.surdMul(u, u); // (1−√2)² = 3 − 2√2
+  assert.equal(Geo.surdCmpRational(u2, F(0)) > 0, true);
+  assert.equal(Geo.surdCmp(Geo.surdAdd(u2, Geo.surdAffine(u, F(-2), F(-1))), Geo.Surd.of(F(0))), 0); // u²−2u−1 = 0
+  const t = Geo.surdAffine(u, F(2), F(5)); // 5 + 2u = 7 − 2√2
+  assert.equal(Geo.surdCmpRational(t, F(4)) > 0, true);
+  assert.equal(Geo.surdCmpRational(t, F(5)) < 0, true);
+});
+
+/* ================= 跟踪角速度 ================= */
+// 标准场景：相机 (0,0)→(10,0)，t∈[0,2]，M(5,1)
+// c = v×d0 = 10，q_min = 1（u* = 1/2），ω_max = 10/(2·1) = 5
+const trackBase = (limit) => Geo.trackingSegment(P(0, 0), P(10, 0), P(5, 1), F(0), F(2), limit);
+
+test('tracking：超限的精确证据与区间端点', () => {
+  const r = trackBase(F(2));
+  assert.equal(r.exceeded, true);
+  assert.equal(r.violation, true);
+  assert.ok(eqF(r.uStar, 1, 2) && eqF(r.tStar, 1));
+  assert.ok(eqF(r.cameraStar.x, 5) && eqF(r.cameraStar.y, 0));
+  assert.ok(eqF(r.omegaMax, 5), `ω_max=${r.omegaMax}`);
+  assert.ok(eqF(r.omega2Max, 25));
+  // 区间端点为 q(u) = ρ = 5/2 的根：q(u) = 100u² − 100u + 26，根式回代精确成立
+  const qOf = (u) => Geo.surdAdd(
+    Geo.surdAdd(Geo.surdAffine(Geo.surdMul(u, u), F(100), F(0)), Geo.surdAffine(u, F(-100), F(0))),
+    Geo.Surd.of(F(26))
+  );
+  assert.equal(Geo.surdCmpRational(qOf(r.uLo), F(5, 2)), 0);
+  assert.equal(Geo.surdCmpRational(qOf(r.uHi), F(5, 2)), 0);
+  // t 区间端点 = 2·u 端点
+  assert.equal(Geo.surdCmp(Geo.surdAffine(r.uLo, F(2), F(0)), r.tLo), 0);
+  assert.equal(Geo.surdCmp(Geo.surdAffine(r.uHi, F(2), F(0)), r.tHi), 0);
+});
+
+test('tracking：等值边界不超限（严格大于）', () => {
+  const r = trackBase(F(5)); // ω_max = 5 = Ω
+  assert.equal(r.exceeded, false);
+  assert.equal(r.violation, false);
+  assert.ok(eqF(r.omegaMax, 5));
+  const r2 = trackBase(F(499, 100)); // 4.99 < 5 ⇒ 超限
+  assert.equal(r2.exceeded, true);
+});
+
+test('tracking：未超限时只有 ω_max 记录', () => {
+  const r = trackBase(F(6));
+  assert.equal(r.exceeded, false);
+  assert.ok(eqF(r.omegaMax, 5) && r.tLo === null);
+});
+
+test('tracking：相机经过标记 ⇒ 方向未定义', () => {
+  const r = Geo.trackingSegment(P(0, 0), P(10, 0), P(5, 0), F(0), F(2), F(100));
+  assert.equal(r.undefined, true);
+  assert.equal(r.violation, true);
+  assert.ok(eqF(r.tStar, 1) && eqF(r.cameraStar.x, 5) && eqF(r.cameraStar.y, 0));
+  // 标记恰在关键帧上（端点）
+  const r2 = Geo.trackingSegment(P(0, 0), P(10, 0), P(10, 0), F(0), F(2), F(1));
+  assert.equal(r2.undefined, true);
+  assert.ok(eqF(r2.tStar, 2));
+});
+
+test('tracking：相机静止（ω = 0 或停在标记上）', () => {
+  const r = Geo.trackingSegment(P(3, 3), P(3, 3), P(3, 9), F(1), F(2), F(1, 100));
+  assert.equal(r.exceeded, false);
+  assert.ok(eqF(r.omegaMax, 0));
+  const r2 = Geo.trackingSegment(P(3, 3), P(3, 3), P(3, 3), F(1), F(2), F(1));
+  assert.equal(r2.undefined, true);
+  assert.ok(eqF(r2.tStar, 1));
+});
+
+test('tracking：最近点裁剪到航段端点', () => {
+  // M(−5,1) 在航线后方：u* 裁剪为 0，q_min = 26，ω_max = 10/(2·26) = 5/26
+  const r = Geo.trackingSegment(P(0, 0), P(10, 0), P(-5, 1), F(0), F(2), F(1, 10));
+  assert.equal(r.exceeded, true);
+  assert.ok(eqF(r.uStar, 0) && eqF(r.omegaMax, 5, 26));
+  assert.equal(Geo.surdCmpRational(r.uLo, F(0)), 0); // 起点被裁剪到 0
+  assert.equal(Geo.surdCmpRational(r.uHi, F(1, 5)), 0); // 终点恰为 1/5（完全平方根式）
+});
+
+test('checkScenario：无遮挡但跟踪超限 ⇒ 不可执行并给出首项依据', () => {
+  const r = Geo.checkScenario({
+    keyframes: [{ t: F(0), p: P(0, 0) }, { t: F(2), p: P(10, 0) }],
+    markers: [P(5, 1), P(50, -50)],
+    rects: [Geo.rectFrom(20, 20, 2, 2)],
+    limits: [F(2), null],
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.firstOcclusion, null);
+  const f = r.firstAngular;
+  assert.ok(f && f.exceeded && !f.undefined);
+  assert.equal(f.segmentIndex, 0);
+  assert.equal(f.markerIndex, 0);
+  assert.ok(eqF(f.tStar, 1) && eqF(f.camera.x, 5) && eqF(f.camera.y, 0));
+  assert.ok(eqF(f.omegaMax, 5) && eqF(f.limit, 2));
+  assert.equal(r.segments[0].angular.length, 1); // M2 未设限值 ⇒ 无条目
+});
+
+test('checkScenario：全程最早超限的精确选择（跨航段、跨标记）', () => {
+  // K1(0,0)@0 → K2(10,0)@2 → K3(10,10)@5
+  // M1(5,1) Ω=2：航段1 tLo = 1−√(3/50) ≈ 0.755
+  // M3(2,1) Ω=2：航段1 tLo = 2/5−2·√(3/200) ≈ 0.155 ← 全程最早
+  // M2(9,5) Ω=3：航段2 tLo = 17/5（完全平方，有理数）
+  const parsed = {
+    keyframes: [{ t: F(0), p: P(0, 0) }, { t: F(2), p: P(10, 0) }, { t: F(5), p: P(10, 10) }],
+    markers: [P(5, 1), P(9, 5), P(2, 1)],
+    rects: [Geo.rectFrom(30, 30, 2, 2)],
+    limits: [F(2), F(3), F(2)],
+  };
+  const r = Geo.checkScenario(parsed);
+  assert.equal(r.ok, false);
+  const f = r.firstAngular;
+  assert.equal(f.segmentIndex, 0);
+  assert.equal(f.markerIndex, 2);
+  assert.ok(eqF(f.tStar, 2, 5) && eqF(f.camera.x, 2) && eqF(f.camera.y, 0));
+  // 航段 2 的超限区间端点为有理数 17/5、18/5
+  const a2 = r.segments[1].angular.find((a) => a.markerIndex === 1);
+  assert.ok(a2 && a2.exceeded);
+  assert.equal(Geo.surdCmpRational(a2.tLo, F(17, 5)), 0);
+  assert.equal(Geo.surdCmpRational(a2.tHi, F(18, 5)), 0);
+  assert.ok(eqF(a2.omegaMax, 10, 3));
+});
+
+test('checkScenario：未设限值 ⇒ 遮挡结论、区间与首项证据完全不变', () => {
+  const base = {
+    keyframes: [{ t: F(0), p: P(0, 0) }, { t: F(2), p: P(10, 0) }, { t: F(4), p: P(10, 10) }],
+    markers: [P(5, 10), P(50, -50)],
+    rects: [Geo.rectFrom(4, 4, 2, 2), Geo.rectFrom(8, 4, 1, 2)],
+  };
+  const r0 = Geo.checkScenario(base);
+  const r1 = Geo.checkScenario({ ...base, limits: [null, null] });
+  assert.deepEqual(r1, r0);
+  assert.equal(r1.firstAngular, null);
+  assert.equal(r1.ok, false);
+  assert.ok(eqF(r1.firstOcclusion.t, 1, 2));
+});
+
+test('checkScenario：遮挡与超限并存 ⇒ 两项首项证据都在', () => {
+  const r = Geo.checkScenario({
+    keyframes: [{ t: F(0), p: P(0, 0) }, { t: F(2), p: P(10, 0) }],
+    markers: [P(5, 10), P(5, 1)],
+    rects: [Geo.rectFrom(4, 4, 2, 2)],
+    limits: [null, F(2)],
+  });
+  assert.equal(r.ok, false);
+  assert.ok(r.firstOcclusion && eqF(r.firstOcclusion.t, 1, 2));
+  assert.ok(r.firstAngular && r.firstAngular.markerIndex === 1);
+});
+
+test('fmtSurd / fmtSurdExact 展示', () => {
+  assert.equal(Geo.fmtSurd(Geo.Surd.of(F(3, 2))), '1.5');
+  assert.match(Geo.fmtSurd(S(1, -1, 2)), /^≈ -0\.414214/);
+  assert.equal(Geo.fmtSurdExact(S(1, -1, 2)), '1 − √(2)');
+  assert.equal(Geo.fmtSurdExact(Geo.Surd.of(F(7))), '7');
+});

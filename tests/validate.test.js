@@ -1,6 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const Geo = require('../src/geometry.js');
 const Validate = require('../src/validate.js');
 
 const OPTS = { width: 960, height: 600 };
@@ -72,4 +73,34 @@ test('矩形尺寸与画布边界', () => {
   assert.ok(Validate.scenario(r2, OPTS).errors.some((e) => e.includes('超出')));
   const r3 = baseRaw(); r3.markers[0] = { x: 1000, y: 10 };
   assert.ok(Validate.scenario(r3, OPTS).errors.some((e) => e.includes('超出')));
+});
+
+test('最大跟踪角速度：合法补录解析为限值', () => {
+  const r = baseRaw();
+  r.markers[0].omegaStr = '0.5';
+  r.markers[1].omegaStr = ' 2.75 ';
+  const v = Validate.scenario(r, OPTS);
+  assert.deepEqual(v.errors, []);
+  assert.ok(v.parsed.limits[0].eq(new Geo.Frac(1n, 2n)));
+  assert.ok(v.parsed.limits[1].eq(new Geo.Frac(11n, 4n)));
+});
+
+test('最大跟踪角速度：留空或缺省表示不限制', () => {
+  const r = baseRaw();
+  r.markers[0].omegaStr = '';
+  const v = Validate.scenario(r, OPTS);
+  assert.deepEqual(v.errors, []);
+  assert.deepEqual(v.parsed.limits, [null, null]);
+  const v2 = Validate.scenario(baseRaw(), OPTS); // 历史草稿：无 omegaStr 字段
+  assert.deepEqual(v2.parsed.limits, [null, null]);
+});
+
+test('最大跟踪角速度：须为正的小数', () => {
+  for (const bad of ['abc', '-1', '0', '1.2.3', '1e3']) {
+    const r = baseRaw();
+    r.markers[0].omegaStr = bad;
+    const v = Validate.scenario(r, OPTS);
+    assert.ok(v.errors.some((e) => e.includes('最大跟踪角速度')), `omegaStr=${bad}`);
+    assert.equal(v.parsed, null);
+  }
 });

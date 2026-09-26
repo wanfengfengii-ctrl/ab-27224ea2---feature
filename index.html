@@ -26,8 +26,11 @@
       <canvas id="cv" width="960" height="600"></canvas>
       <div id="hint" class="hint"></div>
       <div id="scrubBox" class="scrub">
-        <input type="range" id="scrubT" min="0" max="1000" value="0" aria-label="时间轴">
-        <span id="scrubLabel"></span>
+        <div class="scrub-row">
+          <input type="range" id="scrubT" min="0" max="1000" value="0" aria-label="时间轴">
+          <span id="scrubLabel"></span>
+        </div>
+        <canvas id="timeline" height="18" aria-label="跟踪超限区间时间轴"></canvas>
       </div>
       <p class="legend">
         <span><span class="lg key">●</span> 相机关键帧（拖动改位置，右侧改时间）</span>
@@ -35,6 +38,7 @@
         <span><span class="lg rc">■</span> 保护矩形（选中后拖右下角改大小）</span>
         <span><span class="lg ok">━</span> 安全视线</span>
         <span><span class="lg bad">━</span> 被遮挡视线</span>
+        <span><span class="lg bad">▬</span> 跟踪超限航段 / 时间轴红带</span>
       </p>
     </section>
     <aside>
@@ -46,7 +50,7 @@
         <div id="keyList" class="list"></div>
       </details>
       <details open>
-        <summary>待拍摄标记点（2–6 个，不得落在矩形内）</summary>
+        <summary>待拍摄标记点（2–6 个，不得落在矩形内；ω限 可补录最大跟踪角速度）</summary>
         <div id="markerList" class="list"></div>
       </details>
       <details open>

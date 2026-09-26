@@ -10,7 +10,8 @@
 
   const LIMITS = { keyframes: [2, 4], markers: [2, 6], rects: [1, 4] };
 
-  // raw: { keyframes:[{tStr,x,y}], markers:[{x,y}], rects:[{x,y,w,h}] }；opts: {width,height}
+  // raw: { keyframes:[{tStr,x,y}], markers:[{x,y,omegaStr?}], rects:[{x,y,w,h}] }；opts: {width,height}
+  // markers[i].omegaStr：可选，正的小数（最大跟踪角速度限值）；留空/缺省表示该标记不限制。
   function scenario(raw, opts) {
     const errors = [];
     const W = opts && opts.width, H = opts && opts.height;
@@ -43,6 +44,12 @@
     mk.forEach((m, i) => {
       if (!finite(m.x) || !finite(m.y)) errors.push(`标记点 M${i + 1} 坐标无效`);
       else if (!inBounds(m.x, m.y)) errors.push(`标记点 M${i + 1} 超出画布范围`);
+      const s = m.omegaStr == null ? '' : String(m.omegaStr).trim();
+      if (s !== '') {
+        const om = Geo.tryParse(s);
+        if (!om || om.cmp(new Geo.Frac(0n)) <= 0)
+          errors.push(`标记点 M${i + 1} 的最大跟踪角速度「${m.omegaStr}」须为正的小数（留空表示不限制）`);
+      }
     });
     rc.forEach((r, i) => {
       if (![r.x, r.y, r.w, r.h].every(finite)) errors.push(`保护矩形 R${i + 1} 参数无效`);
@@ -52,9 +59,13 @@
 
     if (errors.length) return { errors, parsed: null };
 
-    const parsed = { keyframes: [], markers: [], rects: [] };
+    const parsed = { keyframes: [], markers: [], rects: [], limits: [] };
     kf.forEach((k, i) => parsed.keyframes.push({ t: ts[i], p: Geo.Pt(Math.round(k.x), Math.round(k.y)) }));
-    mk.forEach((m) => parsed.markers.push(Geo.Pt(Math.round(m.x), Math.round(m.y))));
+    mk.forEach((m) => {
+      parsed.markers.push(Geo.Pt(Math.round(m.x), Math.round(m.y)));
+      const s = m.omegaStr == null ? '' : String(m.omegaStr).trim();
+      parsed.limits.push(s === '' ? null : Geo.tryParse(s)); // 已校验：正小数或留空
+    });
     rc.forEach((r) => parsed.rects.push(Geo.rectFrom(Math.round(r.x), Math.round(r.y), Math.round(r.w), Math.round(r.h))));
 
     parsed.markers.forEach((M, mi) => parsed.rects.forEach((R, ri) => {

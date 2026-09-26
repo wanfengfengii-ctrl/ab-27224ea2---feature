@@ -16,7 +16,7 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  # 一次性校核服务：测试 + 构建 + 遮挡判定冒烟，完成后自行退出并以退出码报告
+  # 一次性校核服务：测试 + 构建 + 判定冒烟（遮挡 + 跟踪角速度），完成后自行退出并以退出码报告
   # 用法：docker compose run --rm verify
   #   或：docker compose up --build --exit-code-from verify verify
   verify:

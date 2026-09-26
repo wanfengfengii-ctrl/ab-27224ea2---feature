@@ -1,5 +1,5 @@
 /*
- * verify.js — 一次性校核入口：单元测试 → 构建 → 遮挡判定冒烟。
+ * verify.js — 一次性校核入口：单元测试 → 构建 → 判定冒烟（遮挡 + 跟踪角速度）。
  * 任一步骤失败即以非零退出码终止；全部通过退出码 0。
  */
 'use strict';
@@ -10,7 +10,7 @@ const root = path.join(__dirname, '..');
 const steps = [
   ['单元测试（node --test）', ['--test']],
   ['构建（scripts/build.js）', ['scripts/build.js']],
-  ['遮挡判定冒烟（scripts/smoke.js）', ['scripts/smoke.js']],
+  ['判定冒烟（遮挡 + 跟踪角速度，scripts/smoke.js）', ['scripts/smoke.js']],
 ];
 
 for (let i = 0; i < steps.length; i++) {

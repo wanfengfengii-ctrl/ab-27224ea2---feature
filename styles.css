@@ -9,6 +9,7 @@
   --ok: #3fbf6f;
   --bad: #ff5a5a;
   --warn: #ffb84d;
+  --ang: #c78bff;
 }
 * { box-sizing: border-box; }
 body {
@@ -59,6 +60,12 @@ canvas {
 .lg.rc { color: var(--bad); }
 .lg.ok { color: var(--ok); }
 .lg.bad { color: var(--bad); }
+.lg.ang { color: var(--ang, #c78bff); }
+.scrub-col { flex: 1; position: relative; }
+.track-marks { position: relative; height: 7px; margin: 1px 2px 0; pointer-events: none; }
+.track-marks .occ { position: absolute; top: 0; height: 4px; background: var(--bad); opacity: 0.85; border-radius: 1px; }
+.track-marks .ang { position: absolute; top: 0; height: 4px; background: #c78bff; opacity: 0.9; border-radius: 1px; }
+.track-marks .undef { position: absolute; top: -1px; width: 3px; height: 7px; background: #ffd84d; margin-left: -1.5px; }
 aside { flex: 1 1 340px; max-width: 460px; display: flex; flex-direction: column; gap: 10px; }
 .verdict { padding: 12px 14px; border-radius: 8px; font-weight: 700; font-size: 15px; text-align: center; }
 .verdict.pending { background: var(--panel2); color: var(--muted); }
@@ -88,5 +95,9 @@ summary { cursor: pointer; font-weight: 600; color: #c9d4e0; }
 #report .row { padding: 3px 6px; border-radius: 4px; margin: 2px 0; font-size: 13px; }
 #report .row.ok { color: #7ce6a3; }
 #report .row.bad { color: #ff9a9a; background: #2a1717; }
+#report .row.ang { color: #d9b3ff; background: #271a33; }
+#report .ang-ok { color: #b7e6c9; }
+#report .ang-bad { color: #e3b3ff; }
+.item input.winp { width: 78px; }
 #report .safe { color: #9fd8b4; }
 .muted { color: var(--muted); }

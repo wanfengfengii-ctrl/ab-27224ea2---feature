@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---------- 一次性校核服务 ----------
-# 运行单元测试、构建与遮挡判定冒烟，随容器退出并以退出码报告结果。
+# 运行单元测试、构建与判定冒烟（遮挡 + 跟踪角速度），随容器退出并以退出码报告结果。
 FROM node:20-alpine AS verify
 WORKDIR /app
 COPY package.json ./

@@ -1,5 +1,6 @@
 /*
- * validate.js — 拍摄配置的合法性校验（数量、时间严格递增、边界、标记点/相机不得落入保护矩形）。
+ * validate.js — 拍摄配置的合法性校验（数量、时间严格递增、边界、标记点/相机不得落入保护矩形、
+ * 标记可选的正最大跟踪角速度 ωmax，单位 rad/时间单位；留空表示不限制）。
  * 浏览器与 Node 双端可用；校验通过时返回解析好的精确（Frac）场景供 checkScenario 使用。
  */
 (function (root, factory) {
@@ -44,6 +45,18 @@
       if (!finite(m.x) || !finite(m.y)) errors.push(`标记点 M${i + 1} 坐标无效`);
       else if (!inBounds(m.x, m.y)) errors.push(`标记点 M${i + 1} 超出画布范围`);
     });
+    const lims = [];
+    mk.forEach((m, i) => {
+      const s = String(m.wMaxStr == null ? '' : m.wMaxStr).trim();
+      if (s === '') { lims.push(null); return; } // 留空 = 历史标记，不做角速度校核
+      const L = Geo.tryParse(s);
+      if (!L) errors.push(`标记点 M${i + 1} 的最大跟踪角速度「${m.wMaxStr}」无法解析`);
+      else if (L.n <= 0n) {
+        // 必须为正数（零或负值无意义：任何非零跟踪都会被永久判超限）
+        errors.push(`标记点 M${i + 1} 的最大跟踪角速度必须为正数（当前「${m.wMaxStr}」）`);
+      }
+      lims.push(L);
+    });
     rc.forEach((r, i) => {
       if (![r.x, r.y, r.w, r.h].every(finite)) errors.push(`保护矩形 R${i + 1} 参数无效`);
       else if (!(r.w >= 4 && r.h >= 4)) errors.push(`保护矩形 R${i + 1} 的宽、高均须 ≥ 4`);
@@ -52,7 +65,7 @@
 
     if (errors.length) return { errors, parsed: null };
 
-    const parsed = { keyframes: [], markers: [], rects: [] };
+    const parsed = { keyframes: [], markers: [], rects: [], limits: lims };
     kf.forEach((k, i) => parsed.keyframes.push({ t: ts[i], p: Geo.Pt(Math.round(k.x), Math.round(k.y)) }));
     mk.forEach((m) => parsed.markers.push(Geo.Pt(Math.round(m.x), Math.round(m.y))));
     rc.forEach((r) => parsed.rects.push(Geo.rectFrom(Math.round(r.x), Math.round(r.y), Math.round(r.w), Math.round(r.h))));

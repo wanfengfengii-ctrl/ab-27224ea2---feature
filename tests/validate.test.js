@@ -73,3 +73,42 @@ test('矩形尺寸与画布边界', () => {
   const r3 = baseRaw(); r3.markers[0] = { x: 1000, y: 10 };
   assert.ok(Validate.scenario(r3, OPTS).errors.some((e) => e.includes('超出')));
 });
+
+test('最大跟踪角速度：留空表示不限制（历史标记）', () => {
+  const r = baseRaw();
+  r.markers[0].wMaxStr = '';
+  r.markers[1].wMaxStr = '  ';
+  const v = Validate.scenario(r, OPTS);
+  assert.deepEqual(v.errors, []);
+  assert.equal(v.parsed.limits[0], null);
+  assert.equal(v.parsed.limits[1], null);
+});
+
+test('最大跟踪角速度：正数（小数）解析为精确限值', () => {
+  const v = Validate.scenario(baseRawWith('0.25'), OPTS);
+  assert.deepEqual(v.errors, []);
+  const F = v.parsed.limits[0].constructor;
+  assert.ok(v.parsed.limits[0].eq(new F(BigInt(1), BigInt(4))));
+  assert.equal(v.parsed.limits[1], null); // 未填的仍为不限制
+});
+
+test('最大跟踪角速度：非十进制（如分数）不可解析', () => {
+  const r = baseRaw();
+  r.markers[0].wMaxStr = '1/2';
+  assert.ok(Validate.scenario(r, OPTS).errors.some((e) => e.includes('M1') && e.includes('无法解析')));
+});
+
+test('最大跟踪角速度：零与负数被拒', () => {
+  const r0 = baseRawWith('0');
+  assert.ok(Validate.scenario(r0, OPTS).errors.some((e) => e.includes('M1') && e.includes('正数')));
+  const r1 = baseRawWith('-1.5');
+  assert.ok(Validate.scenario(r1, OPTS).errors.some((e) => e.includes('M1') && e.includes('正数')));
+  const r2 = baseRawWith('abc');
+  assert.ok(Validate.scenario(r2, OPTS).errors.some((e) => e.includes('无法解析')));
+});
+
+function baseRawWith(lim) {
+  const r = baseRaw();
+  r.markers[0].wMaxStr = lim;
+  return r;
+}

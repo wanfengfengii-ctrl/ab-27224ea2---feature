@@ -1,0 +1,25 @@
+name: uw-shot-planner
+
+services:
+  # Web 服务：宿主机端口通过 WEB_PORT 环境变量配置（默认 8080）
+  web:
+    build:
+      context: .
+      target: web
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # 一次性校核服务：测试 + 构建 + 遮挡判定冒烟，完成后自行退出并以退出码报告
+  # 用法：docker compose run --rm verify
+  #   或：docker compose up --build --exit-code-from verify verify
+  verify:
+    build:
+      context: .
+      target: verify

@@ -1,0 +1,16 @@
+{
+  "name": "uw-shot-planner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "水下遗址拍摄航线与保护矩形遮挡校核（纯前端，连续精确判定）",
+  "scripts": {
+    "test": "node --test",
+    "build": "node scripts/build.js",
+    "smoke": "node scripts/smoke.js",
+    "verify": "node scripts/verify.js",
+    "serve": "node scripts/serve.js dist"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

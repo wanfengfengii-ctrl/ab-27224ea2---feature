@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>水下遗址拍摄航线遮挡校核</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <h1>水下遗址拍摄航线遮挡校核</h1>
+    <nav class="toolbar">
+      <button type="button" data-mode="select" class="active">选择 / 拖动</button>
+      <button type="button" data-mode="keyframe">＋ 相机关键帧</button>
+      <button type="button" data-mode="marker">＋ 标记点</button>
+      <button type="button" data-mode="rect">＋ 保护矩形</button>
+      <span class="sep"></span>
+      <button type="button" id="btnDelete">删除选中</button>
+      <button type="button" id="btnSample">载入示例</button>
+      <button type="button" id="btnClear">清空</button>
+      <button type="button" id="btnCheck" class="primary">校核</button>
+    </nav>
+  </header>
+  <main>
+    <section class="canvas-wrap">
+      <canvas id="cv" width="960" height="600"></canvas>
+      <div id="hint" class="hint"></div>
+      <div id="scrubBox" class="scrub">
+        <input type="range" id="scrubT" min="0" max="1000" value="0" aria-label="时间轴">
+        <span id="scrubLabel"></span>
+      </div>
+      <p class="legend">
+        <span><span class="lg key">●</span> 相机关键帧（拖动改位置，右侧改时间）</span>
+        <span><span class="lg mk">◆</span> 标记点</span>
+        <span><span class="lg rc">■</span> 保护矩形（选中后拖右下角改大小）</span>
+        <span><span class="lg ok">━</span> 安全视线</span>
+        <span><span class="lg bad">━</span> 被遮挡视线</span>
+      </p>
+    </section>
+    <aside>
+      <div id="verdict" class="verdict pending">待校核</div>
+      <div id="errors"></div>
+      <div id="evidence"></div>
+      <details open>
+        <summary>相机关键帧（2–4 个，时间严格递增）</summary>
+        <div id="keyList" class="list"></div>
+      </details>
+      <details open>
+        <summary>待拍摄标记点（2–6 个，不得落在矩形内）</summary>
+        <div id="markerList" class="list"></div>
+      </details>
+      <details open>
+        <summary>保护矩形（1–4 个，视线不得穿过或相切）</summary>
+        <div id="rectList" class="list"></div>
+      </details>
+      <details open>
+        <summary>逐段安全区间（连续精确判定，非抽样）</summary>
+        <div id="report"></div>
+      </details>
+    </aside>
+  </main>
+  <script src="src/geometry.js"></script>
+  <script src="src/validate.js"></script>
+  <script src="src/app.js"></script>
+</body>
+</html>
